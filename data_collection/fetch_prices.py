@@ -1,22 +1,19 @@
 """
-Bir BIST hissesinin günlük fiyat verisini yfinance'ten çeker,
+config.STOCKS içindeki hisselerin günlük fiyat verisini yfinance'ten çeker,
 sütunları ortak biçime çevirir ve ham CSV olarak kaydeder.
 
 Bu aşamada TEMİZLEME YAPILMAZ: değerler yfinance'ten geldiği gibi kalır,
-yalnızca sütun adları ve tarih biçimi standartlaştırılır.
+yalnızca sütun adları, sembol ve tarih biçimi standartlaştırılır.
 """
 
-from pathlib import Path
+import time
 
 import pandas as pd
 import yfinance as yf
 
-SYMBOL = "THYAO.IS"
-PERIOD = "5y"
+from config import START_DATE, STOCKS, RAW_DIR, raw_csv_path, yahoo_symbol
 
-# Bu dosya data_collection/ içinde; iki üst klasör proje kök dizini.
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RAW_DIR = PROJECT_ROOT / "data" / "raw"
+WAIT_SECONDS = 1  # Yahoo'ya art arda hızlı istek atmamak için
 
 # yfinance sütun adı -> bizim standart sütun adımız
 COLUMN_MAP = {
@@ -32,17 +29,20 @@ OUTPUT_COLUMNS = ["symbol", "date", "open", "high", "low",
                   "close", "adj_close", "volume"]
 
 
-def fetch_raw(symbol: str, period: str) -> pd.DataFrame:
-    """yfinance'ten günlük veriyi hiç değiştirmeden döndürür."""
-    df = yf.Ticker(symbol).history(period=period, interval="1d",
-                                   auto_adjust=False)
+def fetch_raw(symbol: str, start: str) -> pd.DataFrame:
+    """yfinance'ten günlük veriyi hiç değiştirmeden döndürür.
+
+    VeriKaynağıAdaptörü (GAB İOG-A-02): yfinance'e özgü her şey burada.
+    """
+    df = yf.Ticker(yahoo_symbol(symbol)).history(
+        start=start, interval="1d", auto_adjust=False)
     if df.empty:
         raise RuntimeError(f"{symbol} için veri alınamadı.")
     return df
 
 
 def standardize(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-    """Sütun adlarını ve tarih biçimini ortak formata çevirir."""
+    """Sütun adlarını, sembolü ve tarih biçimini ortak formata çevirir."""
     missing = [col for col in COLUMN_MAP if col not in df.columns]
     if missing:
         raise ValueError(f"Beklenen sütunlar eksik: {missing}")
@@ -50,28 +50,25 @@ def standardize(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     out = df[list(COLUMN_MAP)].rename(columns=COLUMN_MAP)
     out = out.reset_index(drop=True)
     out["date"] = df.index.strftime("%Y-%m-%d").to_list()
-    out["symbol"] = symbol
+    out["symbol"] = symbol  # THYAO (".IS" olmadan)
     return out[OUTPUT_COLUMNS]
 
 
 def main() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
 
-    print(f"{SYMBOL} verisi çekiliyor...")
-    raw = fetch_raw(SYMBOL, PERIOD)
-    prices = standardize(raw, SYMBOL)
+    for symbol in STOCKS:
+        print(f"{symbol} verisi çekiliyor ({START_DATE} -> bugün)...")
+        prices = standardize(fetch_raw(symbol, START_DATE), symbol)
 
-    file_name = SYMBOL.replace(".", "_") + "_raw.csv"
-    output_path = RAW_DIR / file_name
-    prices.to_csv(output_path, index=False, encoding="utf-8")
+        output_path = raw_csv_path(symbol)
+        prices.to_csv(output_path, index=False, encoding="utf-8")
 
-    print(f"Kaydedildi : {output_path}")
-    print(f"Satır      : {len(prices)}")
-    print(f"Tarih      : {prices['date'].iloc[0]} -> {prices['date'].iloc[-1]}")
-    print("\nİlk 3 satır:")
-    print(prices.head(3).to_string(index=False))
-    print("\nVeri türleri:")
-    print(prices.dtypes)
+        print(f"  Kaydedildi: {output_path}")
+        print(f"  Satır     : {len(prices)}")
+        print(f"  Tarih     : {prices['date'].iloc[0]} -> "
+              f"{prices['date'].iloc[-1]}")
+        time.sleep(WAIT_SECONDS)
 
 
 if __name__ == "__main__":

@@ -1,13 +1,12 @@
 """
-SQLite veritabanını oluşturur ve temiz fiyat verisini kaydeder
-(GAB İG-04, İOG-G-04).
+Veritabanını schema.sql'e göre oluşturur ve config.STOCKS içindeki
+hisselerin temiz fiyat verisini kaydeder (GAB İG-04, İOG-G-04).
 
-Akış: data/raw/<SEMBOL>_raw.csv -> clean_prices() -> data/borsa.db
-
-Tablolar:
-  hisse              : desteklenen hisseler (GAB nesne modeli: Hisse)
-  fiyat_kaydi        : günlük OHLCV kayıtları (GAB: FiyatKaydı)
-  guncelleme_gunlugu : her çalıştırmanın özeti ve temizleme raporu
+Akış (her hisse için):
+  data/raw/<SEMBOL>_raw.csv -> clean_prices()
+      -> stocks + prices tabloları
+      -> data/processed/<SEMBOL>_clean.csv
+      -> update_log tablosu
 """
 
 import json
@@ -15,59 +14,17 @@ import sqlite3
 from contextlib import closing
 from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pandas as pd
 
 from cleaning import clean_prices
-
-SYMBOL = "THYAO.IS"
-SYMBOL_NAME = "Türk Hava Yolları"
-
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-RAW_DIR = PROJECT_ROOT / "data" / "raw"
-DB_PATH = PROJECT_ROOT / "data" / "borsa.db"
-
-SCHEMA = """
-CREATE TABLE IF NOT EXISTS hisse (
-    symbol   TEXT PRIMARY KEY,
-    name     TEXT,
-    exchange TEXT NOT NULL DEFAULT 'BIST',
-    currency TEXT NOT NULL DEFAULT 'TRY'
-);
-
-CREATE TABLE IF NOT EXISTS fiyat_kaydi (
-    symbol    TEXT    NOT NULL REFERENCES hisse(symbol),
-    date      TEXT    NOT NULL
-              CHECK (date GLOB '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'),
-    open      REAL    NOT NULL CHECK (open > 0),
-    high      REAL    NOT NULL CHECK (high > 0),
-    low       REAL    NOT NULL CHECK (low > 0),
-    close     REAL    NOT NULL CHECK (close > 0),
-    adj_close REAL    NOT NULL CHECK (adj_close > 0),
-    volume    INTEGER NOT NULL CHECK (volume >= 0),
-    CHECK (low <= open AND open <= high AND low <= close AND close <= high),
-    PRIMARY KEY (symbol, date)
-);
-
-CREATE TABLE IF NOT EXISTS guncelleme_gunlugu (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol      TEXT    NOT NULL,
-    run_at      TEXT    NOT NULL,
-    status      TEXT    NOT NULL CHECK (status IN ('BASARILI', 'HATA')),
-    input_rows  INTEGER,
-    removed     INTEGER,
-    inserted    INTEGER,
-    existing    INTEGER,
-    detail      TEXT
-);
-"""
+from config import (DB_PATH, PROCESSED_DIR, SCHEMA_PATH, STOCKS, TIMEZONE,
+                    clean_csv_path, raw_csv_path, yahoo_symbol)
 
 # Aynı (symbol, date) zaten varsa satırı güncelle: yeni bir temettü
 # geldiğinde yfinance geçmiş adj_close değerlerini değiştirir.
 UPSERT_PRICE = """
-INSERT INTO fiyat_kaydi
-    (symbol, date, open, high, low, close, adj_close, volume)
+INSERT INTO prices (symbol, date, open, high, low, close, adj_close, volume)
 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (symbol, date) DO UPDATE SET
     open = excluded.open,
@@ -76,6 +33,13 @@ ON CONFLICT (symbol, date) DO UPDATE SET
     close = excluded.close,
     adj_close = excluded.adj_close,
     volume = excluded.volume
+"""
+
+UPSERT_STOCK = """
+INSERT INTO stocks (symbol, name, yahoo_symbol) VALUES (?, ?, ?)
+ON CONFLICT (symbol) DO UPDATE SET
+    name = excluded.name,
+    yahoo_symbol = excluded.yahoo_symbol
 """
 
 PRICE_COLUMNS = ["symbol", "date", "open", "high", "low",
@@ -91,21 +55,21 @@ def connect(db_path: Path) -> sqlite3.Connection:
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Tablolar yoksa oluşturur; varsa dokunmaz."""
-    conn.executescript(SCHEMA)
+    """schema.sql'deki tabloları ve görünümleri oluşturur (varsa dokunmaz)."""
+    conn.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
 
 
 def count_prices(conn: sqlite3.Connection, symbol: str) -> int:
-    """Bir hissenin veritabanındaki kayıt sayısını döndürür."""
+    """Bir hissenin veritabanındaki fiyat kaydı sayısını döndürür."""
     row = conn.execute(
-        "SELECT COUNT(*) FROM fiyat_kaydi WHERE symbol = ?", (symbol,)
+        "SELECT COUNT(*) FROM prices WHERE symbol = ?", (symbol,)
     ).fetchone()
     return row[0]
 
 
 def save_prices(conn: sqlite3.Connection, prices: pd.DataFrame,
                 symbol: str, name: str) -> tuple[int, int]:
-    """Fiyatları kaydeder; (yeni_eklenen, zaten_var_olan) döndürür."""
+    """Hisseyi ve fiyatlarını kaydeder; (yeni_eklenen, zaten_var) döndürür."""
     rows = [
         (r.symbol, r.date, float(r.open), float(r.high), float(r.low),
          float(r.close), float(r.adj_close), int(r.volume))
@@ -113,10 +77,7 @@ def save_prices(conn: sqlite3.Connection, prices: pd.DataFrame,
     ]
     before = count_prices(conn, symbol)
     with conn:  # hepsi kaydedilir ya da hiçbiri (transaction)
-        conn.execute(
-            "INSERT OR IGNORE INTO hisse (symbol, name) VALUES (?, ?)",
-            (symbol, name),
-        )
+        conn.execute(UPSERT_STOCK, (symbol, name, yahoo_symbol(symbol)))
         conn.executemany(UPSERT_PRICE, rows)
     inserted = count_prices(conn, symbol) - before
     return inserted, len(rows) - inserted
@@ -125,45 +86,45 @@ def save_prices(conn: sqlite3.Connection, prices: pd.DataFrame,
 def write_log(conn: sqlite3.Connection, symbol: str, status: str,
               report: dict, inserted: int | None = None,
               existing: int | None = None) -> None:
-    """Çalıştırmanın özetini guncelleme_gunlugu tablosuna yazar."""
-    run_at = datetime.now(ZoneInfo("Europe/Istanbul"))
+    """Çalıştırmanın özetini update_log tablosuna yazar."""
+    run_at = datetime.now(TIMEZONE).isoformat(timespec="seconds")
     with conn:
         conn.execute(
-            """INSERT INTO guncelleme_gunlugu
-               (symbol, run_at, status, input_rows, removed,
+            """INSERT INTO update_log
+               (source, symbol, run_at, status, input_rows, removed,
                 inserted, existing, detail)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (symbol, run_at.isoformat(timespec="seconds"), status,
-             report.get("girdi_satir"), report.get("silinen_toplam"),
-             inserted, existing, json.dumps(report, ensure_ascii=False)),
+               VALUES ('yfinance', ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (symbol, run_at, status, report.get("girdi_satir"),
+             report.get("silinen_toplam"), inserted, existing,
+             json.dumps(report, ensure_ascii=False)),
         )
 
 
-def main() -> None:
-    input_path = RAW_DIR / f"{SYMBOL.replace('.', '_')}_raw.csv"
-    if not input_path.exists():
-        raise FileNotFoundError(
-            f"{input_path} bulunamadı. Önce fetch_prices.py çalıştırılmalı.")
+def load_symbol(conn: sqlite3.Connection, symbol: str, name: str) -> None:
+    """Bir hissenin ham CSV'sini temizleyip veritabanına yükler."""
+    report: dict = {}
+    try:
+        clean, report = clean_prices(pd.read_csv(raw_csv_path(symbol)))
+        clean.to_csv(clean_csv_path(symbol), index=False, encoding="utf-8")
+        inserted, existing = save_prices(conn, clean, symbol, name)
+    except Exception as err:  # bir hisse hata verirse diğerleri devam etsin
+        report["hata"] = str(err)
+        write_log(conn, symbol, "error", report)
+        print(f"{symbol:<6} HATA: {err}")
+        return
+    write_log(conn, symbol, "success", report, inserted, existing)
+    print(f"{symbol:<6} temizlenen: {report['silinen_toplam']:>4} | "
+          f"yeni: {inserted:>5} | zaten vardı: {existing:>5} | "
+          f"toplam: {count_prices(conn, symbol)}")
 
+
+def main() -> None:
+    PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     with closing(connect(DB_PATH)) as conn:
         create_schema(conn)
-        report: dict = {}
-        try:
-            clean, report = clean_prices(pd.read_csv(input_path))
-            inserted, existing = save_prices(conn, clean, SYMBOL,
-                                             SYMBOL_NAME)
-        except Exception as err:
-            report["hata"] = str(err)
-            write_log(conn, SYMBOL, "HATA", report)
-            raise
-        write_log(conn, SYMBOL, "BASARILI", report, inserted, existing)
-        total = count_prices(conn, SYMBOL)
-
-    print(f"Veritabanı      : {DB_PATH}")
-    print(f"Temizlenen satır: {report['silinen_toplam']}")
-    print(f"Yeni eklenen    : {inserted}")
-    print(f"Zaten vardı     : {existing}")
-    print(f"Toplam kayıt    : {total} ({SYMBOL})")
+        for symbol, name in STOCKS.items():
+            load_symbol(conn, symbol, name)
+    print(f"\nVeritabanı: {DB_PATH}")
 
 
 if __name__ == "__main__":

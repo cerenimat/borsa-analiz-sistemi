@@ -62,7 +62,8 @@ def main() -> None:
 
     print("\n=== TEMETTÜ VE BÖLÜNME GÜNLERİ ===")
     olay_var = (df["Dividends"] != 0) | (df["Stock Splits"] != 0)
-    olaylar = df.loc[olay_var, ["Close", "Adj Close", "Dividends", "Stock Splits"]]
+    olaylar = df.loc[olay_var,
+                     ["Close", "Adj Close", "Dividends", "Stock Splits"]]
     if olaylar.empty:
         print("Bu dönemde temettü veya bölünme yok.")
     else:
@@ -71,8 +72,10 @@ def main() -> None:
     print("\n=== FİYAT TUTARLILIĞI ===")
     fiyatlar = df[["Open", "High", "Low", "Close"]]
     sifir_negatif = (fiyatlar <= 0).any(axis=1).sum()
-    acilis_disarida = ((df["Open"] > df["High"]) | (df["Open"] < df["Low"])).sum()
-    kapanis_disarida = ((df["Close"] > df["High"]) | (df["Close"] < df["Low"])).sum()
+    acilis_disarida = ((df["Open"] > df["High"])
+                       | (df["Open"] < df["Low"])).sum()
+    kapanis_disarida = ((df["Close"] > df["High"])
+                        | (df["Close"] < df["Low"])).sum()
     print("Sıfır/negatif fiyatlı gün        :", sifir_negatif)
     print("Açılış, Low-High aralığı dışında :", acilis_disarida)
     print("Kapanış, Low-High aralığı dışında:", kapanis_disarida)

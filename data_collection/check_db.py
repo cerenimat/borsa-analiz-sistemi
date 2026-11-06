@@ -1,21 +1,18 @@
 """
 Veritabanının içeriğini kontrol eder (yalnızca okur, hiçbir şey yazmaz).
 
-1. Tabloları ve kayıt sayılarını listeler.
+1. Tabloları, görünümleri ve kayıt sayılarını listeler.
 2. Her hissenin tarih aralığını gösterir.
-3. Veritabanındaki veriyi temiz CSV ile karşılaştırır.
+3. Veritabanındaki veriyi temiz CSV dosyalarıyla karşılaştırır.
 4. Son güncelleme günlüğü kayıtlarını gösterir.
 """
 
 import sqlite3
 from contextlib import closing
-from pathlib import Path
 
 import pandas as pd
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DB_PATH = PROJECT_ROOT / "data" / "borsa.db"
-CLEAN_CSV = PROJECT_ROOT / "data" / "processed" / "THYAO_IS_clean.csv"
+from config import DB_PATH, STOCKS, clean_csv_path
 
 
 def main() -> None:
@@ -26,50 +23,48 @@ def main() -> None:
         raise FileNotFoundError(f"{DB_PATH} yok. Önce database.py çalışmalı.")
 
     with closing(sqlite3.connect(DB_PATH)) as conn:
-        print("=== TABLOLAR ===")
-        tables = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type = 'table' "
-            "AND name NOT LIKE 'sqlite_%' ORDER BY name"
+        print("=== TABLOLAR VE GÖRÜNÜMLER ===")
+        objects = conn.execute(
+            "SELECT type, name FROM sqlite_master "
+            "WHERE type IN ('table', 'view') AND name NOT LIKE 'sqlite_%' "
+            "ORDER BY type, name"
         ).fetchall()
-        for (name,) in tables:
+        for kind, name in objects:
             count = conn.execute(f"SELECT COUNT(*) FROM {name}").fetchone()[0]
-            print(f"{name:<20}: {count} kayıt")
+            print(f"{kind:<6} {name:<16}: {count} kayıt")
 
         print("\n=== HİSSE BAZINDA ÖZET ===")
         summary = pd.read_sql(
-            """SELECT h.symbol, h.name, COUNT(f.date) AS gun,
-                      MIN(f.date) AS ilk_tarih, MAX(f.date) AS son_tarih
-               FROM hisse h
-               LEFT JOIN fiyat_kaydi f ON f.symbol = h.symbol
-               GROUP BY h.symbol, h.name""",
+            """SELECT s.symbol, s.yahoo_symbol, COUNT(p.date) AS gun,
+                      MIN(p.date) AS ilk_tarih, MAX(p.date) AS son_tarih
+               FROM stocks s
+               LEFT JOIN prices p ON p.symbol = s.symbol
+               GROUP BY s.symbol, s.yahoo_symbol
+               ORDER BY s.symbol""",
             conn,
         )
         print(summary.to_string(index=False))
 
-        print("\n=== SON 3 GÜN ===")
-        last = pd.read_sql(
-            "SELECT * FROM fiyat_kaydi ORDER BY date DESC LIMIT 3", conn
-        )
-        print(last.to_string(index=False))
-
         print("\n=== CSV İLE KARŞILAŞTIRMA ===")
-        db_prices = pd.read_sql(
-            "SELECT * FROM fiyat_kaydi WHERE symbol = 'THYAO.IS' "
-            "ORDER BY date", conn
-        )
-        csv_prices = pd.read_csv(CLEAN_CSV)
-        csv_prices["symbol"] = csv_prices["symbol"].astype(str)
-        db_prices["symbol"] = db_prices["symbol"].astype(str)
-        same = db_prices.reset_index(drop=True).equals(
-            csv_prices.reset_index(drop=True))
-        print(f"Veritabanı satırı: {len(db_prices)}")
-        print(f"CSV satırı       : {len(csv_prices)}")
-        print(f"Birebir aynı mı? : {'EVET' if same else 'HAYIR'}")
+        for symbol in STOCKS:
+            db_prices = pd.read_sql(
+                "SELECT * FROM prices WHERE symbol = ? ORDER BY date",
+                conn, params=(symbol,),
+            )
+            csv_prices = pd.read_csv(clean_csv_path(symbol))
+            for df in (db_prices, csv_prices):
+                df["symbol"] = df["symbol"].astype(str)
+                df["date"] = df["date"].astype(str)
+            same = db_prices.equals(csv_prices)
+            print(f"{symbol:<6} veritabanı: {len(db_prices)} | "
+                  f"CSV: {len(csv_prices)} | "
+                  f"birebir aynı mı? {'EVET' if same else 'HAYIR'}")
 
-        print("\n=== GÜNCELLEME GÜNLÜĞÜ ===")
+        print("\n=== GÜNCELLEME GÜNLÜĞÜ (son 5) ===")
         log = pd.read_sql(
-            "SELECT id, run_at, status, input_rows, removed, inserted, "
-            "existing FROM guncelleme_gunlugu ORDER BY id", conn
+            "SELECT id, source, symbol, run_at, status, input_rows, "
+            "removed, inserted, existing FROM update_log "
+            "ORDER BY id DESC LIMIT 5", conn
         )
         print(log.to_string(index=False))
 
