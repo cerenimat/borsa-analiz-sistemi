@@ -18,6 +18,7 @@ tüm ekibin kullandığı ortak SQLite veritabanına (`data/borsa.db`) kaydeder.
 | `cleaning.py` | Temizleme kuralları (`clean_prices()`) |
 | `database.py` | Şemayı kurar, hisseleri ve temiz fiyatları yükler, işlem günlerini atar |
 | `check_db.py` | Veritabanını salt okunur olarak doğrular |
+| `verify_prices.py` | Fiyat teyidi: sonradan halka arz, eksik/fazla günler → `data/processed/price_verification.csv` |
 | `explore_yfinance.py` | İlk keşif betiği (yalnızca ekrana yazar, hiçbir şey kaydetmez) |
 
 Hisse listesinin tek kaynağı proje kökündeki `config/bist50_oid.json` dosyasıdır
@@ -97,9 +98,15 @@ Her kuralın kaç satırı sildiği `update_log.detail` alanına JSON olarak yaz
 
 - **yfinance resmî bir API değildir;** hizmet sürekliliği garanti edilmez ve yoğun isteklerde
   erişim geçici olarak engellenebilir. Veri bir kez çekilip veritabanında saklanır.
+- **Sonradan halka arz olan hisseler** 01.01.2023'ten sonra başlar: ASTOR (2023-01-18),
+  CVKMD (2023-04-13), CWENE (2023-05-10), ENERY (2023-08-23), GLRMK (2025-01-17).
+  GLRMK'nin verisi 3 yılın altındadır (yaklaşık 1,8 yıl).
+- **2024-04-09 (Ramazan Bayramı arifesi):** Borsa 13:00'a kadar açıktı, ancak Yahoo bu günün
+  verisini 50 hisseden yalnızca 15'i için veriyor. Diğer 35 hissede bu gün eksik; uydurma
+  veriyle doldurulmadı.
 - **Bayram arifeleri:** Borsa yarım gün çalışır; ilk sürümde 18:10 kuralı bu günlerde de uygulanır.
-- **Kod değişiklikleri:** TRMET ve TRALT, Kasım 2025'te KOZAA ve KOZAL kodlarından yeni
-  kodlarına geçti. Bu hisselerin Yahoo'daki fiyat geçmişi teyit edilecek.
+- **TRMET ve TRALT** Kasım 2025'te KOZAA ve KOZAL kodlarından yeni kodlarına geçti; Yahoo eski
+  geçmişi yeni kodlara taşımış, 2023'ten itibaren veri kesintisiz.
 
 ## Veri ve lisans
 
