@@ -218,3 +218,6 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Veri dosyalari repoya eklenmez (GAB IOG-Y-02)
+data/
