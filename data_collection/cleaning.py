@@ -117,6 +117,8 @@ def clean_prices(df: pd.DataFrame,
 def main() -> None:
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     for symbol in STOCKS:
+        if not raw_csv_path(symbol).exists():
+            continue  # bu hisse için henüz fiyat çekilmemiş
         clean, report = clean_prices(pd.read_csv(raw_csv_path(symbol)))
         clean.to_csv(clean_csv_path(symbol), index=False, encoding="utf-8")
         print(f"=== {symbol} ===")

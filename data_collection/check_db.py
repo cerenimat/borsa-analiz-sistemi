@@ -43,10 +43,14 @@ def main() -> None:
                ORDER BY s.symbol""",
             conn,
         )
-        print(summary.to_string(index=False))
+        with_prices = summary[summary["gun"] > 0]
+        print(with_prices.to_string(index=False))
+        print(f"Fiyatı henüz olmayan hisse: {len(summary) - len(with_prices)}")
 
         print("\n=== CSV İLE KARŞILAŞTIRMA ===")
         for symbol in STOCKS:
+            if not clean_csv_path(symbol).exists():
+                continue  # bu hisse için henüz fiyat yüklenmemiş
             db_prices = pd.read_sql(
                 "SELECT * FROM prices WHERE symbol = ? ORDER BY date",
                 conn, params=(symbol,),
