@@ -13,6 +13,10 @@ For every source database:
     content_symbols  copied, with content ids translated to the target's ids
     update_log       copied (same source + symbol + run_at is not copied twice),
                      so the collection method and dates stay documented
+    sentiments       copied with translated content ids; a score the target
+                     already has for the same content and model is replaced
+                     (scores come from export_sentiments.py, e.g.
+                     data/sentiments_berturk.db, after the model was re-run)
 Afterwards assign_trading_dates() fills empty trading_date fields from the
 target's prices.
 
@@ -27,6 +31,7 @@ Run (from the project root):
     python sentiment/merge_sources.py --target data/borsa.db --dry-run   # only report
     python sentiment/merge_sources.py --target data/borsa.db             # merge
     python sentiment/merge_sources.py --target data/borsa.db data/youtube.db   # one source
+    python sentiment/merge_sources.py --target data/borsa.db data/sentiments_berturk.db   # scores
 """
 import argparse
 import sqlite3
@@ -60,12 +65,9 @@ def open_read_only(path):
 
 def check_compatible(src, tgt, path):
     """Both databases must have the same contents / update_log columns (schema v2)."""
-    for table in ("contents", "content_symbols", "update_log"):
+    for table in ("contents", "content_symbols", "update_log", "sentiments"):
         if columns(src, table) != columns(tgt, table):
             sys.exit(f"{path.name}: table '{table}' differs from the target; schema versions do not match.")
-    if src.execute("SELECT COUNT(*) FROM sentiments").fetchone()[0]:
-        print(f"  note: {path.name} has sentiment rows; they are not merged "
-              "(sentiment analysis runs on the merged database).")
 
 
 def merge_contents(src, tgt):
@@ -96,6 +98,26 @@ def merge_links(src, tgt, id_map):
         added += tgt.execute("INSERT OR IGNORE INTO content_symbols (content_id, symbol) VALUES (?, ?)",
                              (id_map[content_id], symbol)).rowcount
     return added
+
+
+def merge_sentiments(src, tgt, id_map):
+    """Copies scores; returns (added, replaced). A changed score for the same content and model
+    (the model was re-run) replaces the target's row; an identical one is left alone."""
+    find = "SELECT label, score FROM sentiments WHERE content_id = ? AND model = ?"
+    added = replaced = 0
+    for content_id, model, label, score in src.execute(
+            "SELECT content_id, model, label, score FROM sentiments ORDER BY id"):
+        target_id = id_map[content_id]
+        old = tgt.execute(find, (target_id, model)).fetchone()
+        if old is None:
+            tgt.execute("INSERT INTO sentiments (content_id, model, label, score) VALUES (?, ?, ?, ?)",
+                        (target_id, model, label, score))
+            added += 1
+        elif old != (label, score):
+            tgt.execute("UPDATE sentiments SET label = ?, score = ? WHERE content_id = ? AND model = ?",
+                        (label, score, target_id, model))
+            replaced += 1
+    return added, replaced
 
 
 def merge_logs(src, tgt, count_only=()):
@@ -139,8 +161,10 @@ def main(sources, target, dry_run=False):
                 id_map, inserted, existing = merge_contents(src, tgt)
                 links = merge_links(src, tgt, id_map)
                 logs = merge_logs(src, tgt, count_only)
+                scores = merge_sentiments(src, tgt, id_map)
             print(f"{path.name:<16} contents: {sum(types.values()):>6} {types} | new: {inserted:>6} | "
-                  f"already in target: {existing:>6} | links added: {links:>6} | log rows: {logs}")
+                  f"already in target: {existing:>6} | links added: {links:>6} | log rows: {logs}"
+                  + (f" | scores added: {scores[0]}, replaced: {scores[1]}" if any(scores) else ""))
 
         if dry_run:
             tgt.rollback()
@@ -149,10 +173,13 @@ def main(sources, target, dry_run=False):
         tgt.commit()
         assigned, missing = assign_trading_dates(tgt)
         totals = dict(tgt.execute("SELECT type, COUNT(*) FROM contents GROUP BY type").fetchall())
+        scored = dict(tgt.execute("SELECT model, COUNT(*) FROM sentiments GROUP BY model").fetchall())
         bad = tgt.execute("PRAGMA foreign_key_check").fetchall()
 
     print(f"\nTrading date assigned: {assigned} | still empty (no price data yet): {missing}")
     print(f"Target now holds: {totals} | foreign key problems: {len(bad)}")
+    if scored:
+        print(f"Sentiment scores: {scored}")
     print(f"Database: {target}")
 
 
