@@ -16,6 +16,11 @@ For every source database:
 Afterwards assign_trading_dates() fills empty trading_date fields from the
 target's prices.
 
+Forum posts (data/hissenet.db) are logged with update_log.source = 'forum',
+which schema v2 does not allow yet; the target's update_log table is then
+rebuilt with 'forum' added (see fetch_forum.ensure_forum_source). --dry-run
+only reports this.
+
 Source databases are opened read-only. Running the script twice is safe.
 
 Run (from the project root):
@@ -36,6 +41,11 @@ from config import DB_PATH, DATA_DIR  # noqa: E402
 from database import assign_trading_dates, connect, create_schema  # noqa: E402
 
 DEFAULT_SOURCES = [DATA_DIR / "google_news.db", DATA_DIR / "youtube.db"]
+
+
+def allows_forum(conn):
+    sql = conn.execute("SELECT sql FROM sqlite_master WHERE name = 'update_log'").fetchone()[0]
+    return "'forum'" in sql
 
 
 def columns(conn, table):
@@ -88,7 +98,7 @@ def merge_links(src, tgt, id_map):
     return added
 
 
-def merge_logs(src, tgt):
+def merge_logs(src, tgt, count_only=()):
     cols = [c for c in columns(tgt, "update_log") if c != "id"]
     exists = "SELECT 1 FROM update_log WHERE source = ? AND symbol IS ? AND run_at = ?"
     insert = f"INSERT INTO update_log ({', '.join(cols)}) VALUES ({', '.join('?' * len(cols))})"
@@ -96,7 +106,8 @@ def merge_logs(src, tgt):
     copied = 0
     for row in src.execute(f"SELECT {', '.join(cols)} FROM update_log ORDER BY id"):
         if not tgt.execute(exists, (row[i["source"]], row[i["symbol"]], row[i["run_at"]])).fetchone():
-            tgt.execute(insert, row)
+            if row[i["source"]] not in count_only:
+                tgt.execute(insert, row)
             copied += 1
     return copied
 
@@ -106,6 +117,19 @@ def main(sources, target, dry_run=False):
         sys.exit(f"Target database not found: {target}")
     with closing(connect(target)) as tgt:
         create_schema(tgt)   # creates nothing on a schema v2 database; keeps views in place
+        has_forum = False
+        for path in sources:
+            with closing(open_read_only(path)) as src:
+                has_forum |= bool(src.execute(
+                    "SELECT 1 FROM update_log WHERE source = 'forum' LIMIT 1").fetchone())
+        count_only = ()
+        if has_forum and not allows_forum(tgt):
+            if dry_run:
+                print("note: update_log of the target would get 'forum' as an allowed source\n")
+                count_only = ("forum",)
+            else:
+                from fetch_forum import ensure_forum_source
+                ensure_forum_source(tgt)
         for path in sources:
             if path.resolve() == target.resolve():
                 sys.exit("A source cannot be the target itself.")
@@ -114,7 +138,7 @@ def main(sources, target, dry_run=False):
                 types = dict(src.execute("SELECT type, COUNT(*) FROM contents GROUP BY type").fetchall())
                 id_map, inserted, existing = merge_contents(src, tgt)
                 links = merge_links(src, tgt, id_map)
-                logs = merge_logs(src, tgt)
+                logs = merge_logs(src, tgt, count_only)
             print(f"{path.name:<16} contents: {sum(types.values()):>6} {types} | new: {inserted:>6} | "
                   f"already in target: {existing:>6} | links added: {links:>6} | log rows: {logs}")
 
@@ -135,7 +159,8 @@ def main(sources, target, dry_run=False):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Merge collected source databases into the shared database.")
     parser.add_argument("sources", nargs="*", type=Path, default=DEFAULT_SOURCES,
-                        help="source databases (default: data/google_news.db data/youtube.db)")
+                        help="source databases (default: data/google_news.db data/youtube.db; "
+                             "add data/hissenet.db for forum posts)")
     parser.add_argument("--target", type=Path, default=DB_PATH, help="shared database (default: data/borsa.db)")
     parser.add_argument("--dry-run", action="store_true", help="only report, write nothing")
     args = parser.parse_args()
