@@ -65,7 +65,7 @@ boş `trading_date` alanları doldurulur.
 | `content_symbols` | İçerik–hisse bağlantısı (çoka-çok) | Ceren |
 | `sentiments` | Duygu sonuçları; `(content_id, model)` benzersiz | Ceren |
 | `daily_sentiment` (görünüm) | Günlük haber ve yorum ortalamaları (Sümeyye'nin modeline girdi) | — |
-| `update_log` | Her yüklemenin özeti (`yfinance` / `kap` / `news` / `youtube`) | Herkes |
+| `update_log` | Her yüklemenin özeti (`yfinance` / `kap` / `news` / `youtube` / `forum`) | Herkes |
 
 Veritabanına elle kayıt eklenmez veya silinmez; veri yalnızca betiklerle değişir.
 
