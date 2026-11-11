@@ -17,6 +17,8 @@ Sorumlu: Ceren
 | `evaluate_models.py` | Hazır modelleri ve ince ayarlı modeli doğrulama kümelerinde karşılaştırır | `data/validation/eval_results.md` |
 | `score_contents.py` | Puanlanacak içerikleri ince ayarlı modelle puanlar | `sentiments` |
 | `export_sentiments.py` | Duygu puanlarını ve puanlanan içerikleri ortak veritabanına aktarılacak ayrı bir dosyaya çıkarır | çıktı dosyasında `sentiments`, `contents`, `content_symbols`, `stocks` |
+| `update_sentiment.py` | Dört kaynağı güncelleme kipinde toplar, yeni metinleri puanlar, yalnızca yenileri ayrı bir dosyaya çıkarır | `data/work.db`; çıktı `data/updates/update_<tarih>.db` |
+| `incremental.py` | Güncellemede her hissenin başlangıç tarihini hesaplar; toplayıcılar kullanır | — |
 | `merge_sources.py` | `google_news.db`, `youtube.db`, `hissenet.db` ve puan dosyasının içeriğini ortak veritabanına aktarır | hedefte `contents`, `content_symbols`, `update_log`, `sentiments` |
 
 ## Çalıştırma (proje kökünden, `.venv` etkinken)
@@ -167,6 +169,31 @@ puanlanmazlar (`contents`'te kalırlar, yalnızca `sentiments` satırları yoktu
 
 Kurallar ilk 200 satırlık etiketli doğrulama kümesine bakılarak belirlendi, ikinci bağımsız kümeyle kontrol
 edildi.
+
+## Güncelleme (`update_sentiment.py`)
+
+Yeni içerikler tek komutla toplanır, puanlanır ve ortak veritabanına gidecek küçük bir dosyaya çıkarılır:
+
+```bash
+python sentiment/update_sentiment.py                     # dört kaynak, data/work.db (~20 dk)
+python sentiment/update_sentiment.py --skip youtube      # YouTube olmadan (kota bittiyse)
+python sentiment/merge_sources.py data/updates/update_<tarih>.db --target data/borsa.db   # ortak veritabanı
+```
+
+- KAP, haber ve YouTube toplayıcıları `--update` ile çalışır: her hisse kendi son başarılı çalıştırmasından
+  7 gün önce başlar (geç yayımlanan içerik kaçmasın diye; var olanlar tekrar eklenmez). Forum zaten her
+  konuyu son okunan sayfadan sürdürür.
+- YouTube'da güncelleme geçmişle **aynı yöntemi** kullanır: içinde bulunulan yıl, alaka sırasıyla en fazla
+  20 video; bu videoların yorumları yeniden okunur (sonradan gelen yorumlar da girer). Yalnızca en yeni
+  videoları almak son günlerin yorum sayısını yapay olarak artırırdı. Maliyet hisse başına ~120 birim,
+  50 hisse günlük kotaya sığar.
+- Bir kaynak hata verirse (ağ, kota, Google engeli) diğerleri sürer; o kaynak bir sonraki güncellemede
+  kendi son başarılı çalıştırmasından devam eder.
+- Çıktı dosyası bu çalıştırmada eklenen içerikleri, bağlantılarını, puanlarını ve `update_log` satırlarını
+  içerir; aynı dosyayı iki kez birleştirmek bir şeyi çoğaltmaz.
+- **Haber sayısı:** Google yeni haberleri çok, eskileri az döndürür; güncellemeyle son günlerde haber sayısı
+  belirgin artar (ör. Eylül 2026'da günde ~18, Kasım'ın ilk haftasından sonra günde 100+). Ortalama skor
+  bundan etkilenmez, ama `news_count` ham haliyle dönemler arasında karşılaştırılamaz.
 
 ## Kaynakları birleştirme (`merge_sources.py`)
 

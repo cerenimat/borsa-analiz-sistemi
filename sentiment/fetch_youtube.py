@@ -29,6 +29,16 @@ Run (from the project root):
     python sentiment/fetch_youtube.py THYAO PGSUS        # only these stocks
     python sentiment/fetch_youtube.py --retry-failed     # stocks without a successful run
     python sentiment/fetch_youtube.py --db data/test.db  # another database file
+    python sentiment/fetch_youtube.py --db data/work.db --update   # only recent videos
+
+Update (--update): only the years from the stock's start date (see
+incremental.py) to now are searched again, with the same method as the full
+run (relevance order, at most MAX_VIDEOS videos per year whose title contains
+the stock code), so the number of videos per year stays comparable over the
+whole period. Comments of these videos are read again, so videos collected
+earlier also get their later comments; comments already in the database are
+not inserted twice. Cost: about 120 units per stock and year, so one update of
+all 50 stocks fits in one day's quota.
 """
 import argparse
 import html
@@ -37,7 +47,7 @@ import re
 import sys
 import time
 from contextlib import closing
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 import requests
@@ -48,6 +58,7 @@ sys.path.insert(0, str(ROOT / "data_collection"))
 from config import DB_PATH, TIMEZONE  # noqa: E402
 from database import (assign_trading_dates, connect, create_schema,  # noqa: E402
                       seed_stocks)
+from incremental import START_DATE, start_dates  # noqa: E402
 
 START_YEAR = 2023                     # team decision: all sources start on 2023-01-01
 MAX_VIDEOS = 20                       # videos per stock and year (title must contain the stock code)
@@ -230,7 +241,48 @@ def latest_runs(conn):
     return {s: (status, json.loads(detail or "{}")) for s, status, detail in rows}
 
 
-def main(symbols=None, db_path=DB_PATH, retry_failed=False):
+def update_stock(conn, symbol, first, prev, api_key):
+    """--update for one stock: the years from `first` to now, searched as in the full run.
+    Returns the counters main() prints; errors (quota included) are returned, not raised."""
+    update_years = [y for y in years() if y >= first.year]
+    received = inserted = existing = skipped = 0
+    disabled, errors, found = [], [], []
+    per_year = dict(prev.get("videos_per_year", {}))
+    quota_hit = False
+    try:
+        for year in update_years:
+            videos = find_videos(symbol, year, api_key)
+            per_year[str(year)] = len(videos)
+            found += videos
+        for video_id, title in found:
+            try:
+                comments = fetch_comments(video_id, api_key)
+            except CommentsDisabled:
+                disabled.append(video_id)
+                continue
+            except QuotaExceeded:
+                raise
+            except Exception as e:
+                errors.append(f"{video_id}: {safe_error(e, api_key)}")
+                continue
+            received += len(comments)
+            i, x, s = save_comments(conn, symbol, video_id, title, comments)
+            inserted, existing, skipped = inserted + i, existing + x, skipped + s
+    except QuotaExceeded as e:
+        quota_hit = True
+        errors.append(f"update: quota exceeded ({safe_error(e, api_key)})")
+    except Exception as e:
+        errors.append(f"update: search: {safe_error(e, api_key)}")
+    # completed_years / videos are carried over, so --retry-failed of the full run keeps working
+    detail = {"update_years": update_years, "update_videos": [v for v, _ in found],
+              "completed_years": prev.get("completed_years", []),
+              "videos_per_year": per_year,
+              "videos": sorted(set(prev.get("videos", [])) | {v for v, _ in found}),
+              "comments_disabled": disabled, "errors": errors[:20]}
+    return found, received, inserted, existing, skipped, errors, detail, quota_hit
+
+
+def main(symbols=None, db_path=DB_PATH, retry_failed=False, update=False, since=None):
     api_key = load_api_key()
     with closing(connect(db_path)) as conn:
         create_schema(conn)
@@ -249,7 +301,27 @@ def main(symbols=None, db_path=DB_PATH, retry_failed=False):
 
         totals = {"videos": 0, "inserted": 0, "existing": 0, "skipped": 0}
         quota_hit = False
+        if update:
+            firsts = start_dates(conn, "youtube", since)
+            prev_runs = latest_runs(conn)
+            print(f"Update: years from each stock's start date, up to {MAX_VIDEOS} videos per year\n")
         for symbol in stocks:
+            if update:
+                found, received, inserted, existing, skipped, errors, detail, quota_hit = update_stock(
+                    conn, symbol, firsts.get(symbol, START_DATE), prev_runs.get(symbol, ("", {}))[1], api_key)
+                status = "error" if errors else "success"
+                write_log(conn, symbol, status, received, skipped, inserted, existing, detail)
+                totals["videos"] += len(found)
+                totals["inserted"] += inserted
+                totals["existing"] += existing
+                totals["skipped"] += skipped
+                print(f"{symbol:<6} videos: {len(found):>3} (years {detail['update_years']}) | "
+                      f"comments: {received:>5} | new: {inserted:>5} | existing: {existing:>5} | {status}")
+                if quota_hit:
+                    print("\nYouTube API daily quota is used up. Run the update again tomorrow; "
+                          "the remaining stocks start from their last successful run.")
+                    break
+                continue
             received = inserted = existing = skipped = 0
             # With --retry-failed, years finished in the previous (interrupted) run are not searched again.
             prev = runs.get(symbol, ("", {}))[1]
@@ -318,5 +390,9 @@ if __name__ == "__main__":
     parser.add_argument("--retry-failed", action="store_true",
                         help="only stocks without a successful run")
     parser.add_argument("--db", type=Path, default=DB_PATH, help="database file")
+    parser.add_argument("--update", action="store_true",
+                        help="only the years since each stock's last successful run, same method")
+    parser.add_argument("--since", type=date.fromisoformat, help="with --update: start date for every stock")
     args = parser.parse_args()
-    main([s.upper() for s in args.symbols] or None, db_path=args.db, retry_failed=args.retry_failed)
+    main([s.upper() for s in args.symbols] or None, db_path=args.db, retry_failed=args.retry_failed,
+         update=args.update or bool(args.since), since=args.since)
