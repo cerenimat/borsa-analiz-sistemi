@@ -9,7 +9,9 @@ Sorumlu: Ceren
 | `fetch_kap.py` | BIST 50 için 01.01.2023'ten bugüne KAP bildirimlerini çeyrek çeyrek çeker | `contents`, `content_symbols`, `update_log` |
 | `fetch_youtube.py` | Her hisse için 2023'ten bugüne Türkçe videoları yıl yıl arar (başlığında hisse kodu geçenler), yorumlarını çeker | `contents`, `content_symbols`, `update_log` |
 | `fetch_news.py` | Her hisse için 2023'ten bugüne Google Haberler RSS aramasını ay ay yapar; başlığında şirket adı/kodu geçen haberleri tutar | `contents`, `content_symbols`, `update_log` |
-| `merge_sources.py` | `google_news.db` ve `youtube.db` içeriğini ortak veritabanına aktarır | hedefte `contents`, `content_symbols`, `update_log` |
+| `fetch_forum.py` | Hisse.net'te her hissenin forum konusundan 2023'ten bugüne gönderileri çeker | `contents`, `content_symbols`, `update_log` |
+| `export_sentiments.py` | Duygu puanlarını ve puanlanan içerikleri ortak veritabanına aktarılacak ayrı bir dosyaya çıkarır | çıktı dosyasında `sentiments`, `contents`, `content_symbols`, `stocks` |
+| `merge_sources.py` | `google_news.db`, `youtube.db`, `hissenet.db` ve puan dosyasının içeriğini ortak veritabanına aktarır | hedefte `contents`, `content_symbols`, `update_log`, `sentiments` |
 
 ## Çalıştırma (proje kökünden, `.venv` etkinken)
 
@@ -68,6 +70,56 @@ python sentiment/fetch_news.py --db data/google_news.db --retry-failed  # yarım
 - **Kısıtlar:** Google eski aylar için daha az haber döndürür (2023'te az, 2026'da çok). Eski haberlerde
   yayın saati çoğunlukla gerçek değildir (10:00/11:00 görünür); bu yüzden haberlerde 18:10 kuralı gün
   düzeyinde kalır. t gününün duygusu t+1'i tahmin etmek için kullanıldığında sızıntı oluşmaz.
+
+## Forum (`fetch_forum.py`)
+
+```bash
+python sentiment/fetch_forum.py --db data/hissenet.db                 # 50 hissenin tamamı
+python sentiment/fetch_forum.py --db data/hissenet.db THYAO PGSUS     # yalnızca bu hisseler
+python sentiment/fetch_forum.py --db data/hissenet.db --retry-failed  # yarım kalan hisseler
+python sentiment/fetch_forum.py --db data/forum_test.db --check       # yalnızca bulunan konuları listeler
+```
+
+- Hisse.net (vBulletin) pazar alt forumlarında her hissenin bir konusu var; betik konuyu bulur, 2023 öncesi
+  sayfaları ikili aramayla atlar ve 01.01.2023'ten bugüne tüm gönderileri yazar (`type = 'comment'`,
+  `source = 'Hisse.net'`, `update_log.source = 'forum'`).
+- Yalnızca gönderi metni (alıntılanan eski gönderiler çıkarılır), tarih, konu başlığı ve bağlantı saklanır.
+  Kullanıcı adı, unvan, imza ve profil bilgisi saklanmaz (İOG-Y-04). robots.txt'nin yasakladığı sayfalara
+  istek atılmaz; istekler arasında beklenir.
+- Tekrar çalıştırmak güvenlidir: her konu son okunan sayfadan devam eder, var olan gönderi tekrar eklenmez.
+- `'forum'` kaynağı şemadaki `update_log` izin listesinde yoksa betik (ve `merge_sources.py`) ekler.
+
+## Duygu puanları (`export_sentiments.py`)
+
+Puanlama ince ayarlı BERTurk modeliyle (~440 MB, Git'te yok) tek makinede yapılır; puanlar ortak veritabanına
+bu dosya üzerinden gelir:
+
+```bash
+python sentiment/export_sentiments.py --db data/work.db                       # -> data/sentiments_berturk.db
+python sentiment/merge_sources.py data/sentiments_berturk.db --target data/borsa.db
+```
+
+- Kaynak veritabanı salt okunur açılır; var olan çıktı dosyasının üzerine yazılmaz. Şema sürümleri uyuşmazsa
+  betik durur.
+- `merge_sources.py` içerikleri hedefte `source` + `source_id` ile eşler; aynı içerik + model için gelen yeni
+  puan eskisinin yerine yazılır.
+
+**Puanlanmayan içerikler.** Hisse hakkında görüş taşımayan metinler günlük ortalamayı nötre çeker; bu yüzden
+puanlanmazlar (`contents`'te kalırlar, yalnızca `sentiments` satırları yoktur):
+
+- KAP: yalnızca şirketin kendi özel durum açıklamaları (`category = 'ODA'`) puanlanır. Rutin bildirimler
+  (DG: genel kurul, bono itfası…; FR: finansal rapor; DKB) ve BIST/MKK/Takasbank duyuruları
+  (`is_company_notice = 0`) yön taşımadığı için dışarıda kalır.
+- Haberler: hepsi puanlanır (konu dışı başlıklar zaten `fetch_news.py`'de elenir).
+- Yorum ve forum gönderileri: reklam içerenler (spam), harf/rakam sayısı 4'ten az olanlar, görüş ifadesi
+  (fiyat, hedef, al/sat, kâr/zarar, sayı…) içermeyen 200 karakterden kısa teşekkür/övgü ("emeğinize sağlık
+  hocam") ve video isteği yorumları dışarıda kalır. YouTube'da bağlantı içeren yorum reklam sayılır (bot,
+  kurs, üyelik linkleri); forumda bağlantılar paylaşılan haberdir, kontrolden önce silinir. Forum mobil
+  uygulama imzaları ("… hisse.net mobile app kullanarak gönderildi", Tapatalk) hem kontrolden hem model
+  girdisinden çıkarılır.
+
+Kurallar ilk 200 satırlık etiketli doğrulama kümesine bakılarak belirlendi, ikinci bağımsız kümeyle kontrol
+edildi.
 
 ## Kaynakları birleştirme (`merge_sources.py`)
 
