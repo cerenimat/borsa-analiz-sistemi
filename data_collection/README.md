@@ -17,6 +17,7 @@ tüm ekibin kullandığı ortak SQLite veritabanına (`data/borsa.db`) kaydeder.
 | `fetch_prices.py` | yfinance'ten ham fiyat verisini çeker → `data/raw/<SEMBOL>_raw.csv` |
 | `cleaning.py` | Temizleme kuralları (`clean_prices()`) |
 | `database.py` | Şemayı kurar, hisseleri ve temiz fiyatları yükler, işlem günlerini atar |
+| `update.py` | Günlük güncelleme: yalnızca son günleri çeker, temettüde hisseyi baştan çeker, `update_log`'a yazar |
 | `check_db.py` | Veritabanını salt okunur olarak doğrular |
 | `verify_prices.py` | Fiyat teyidi: sonradan halka arz, eksik/fazla günler → `data/processed/price_verification.csv` |
 | `explore_yfinance.py` | İlk keşif betiği (yalnızca ekrana yazar, hiçbir şey kaydetmez) |
@@ -45,6 +46,23 @@ python tests\test_trading_dates.py       # Test (isteğe bağlı)
 
 `database.py` tekrar çalıştırılabilir: aynı kayıt iki kez eklenmez, var olan kayıt
 güncellenir.
+
+### Günlük güncelleme
+
+Veritabanı bir kez kurulduktan sonra fiyatları güncellemek için tek komut yeter:
+
+```powershell
+python data_collection\update.py
+```
+
+- Her hissenin son tarihinden 7 takvim günü geriden başlayarak veri çeker. Örtüşen günler,
+  Yahoo'nun sonradan düzelttiği değerleri yakalar.
+- Örtüşen günlerde `adj_close` değişmişse (yeni temettü veya bölünme) hisse 01.01.2023'ten
+  baştan çekilir.
+- Her hisse `update_log`'a yazılır; `detail` alanındaki `mod` değeri `artimli` ya da `tam` olur.
+- Hata veren hisse bir sonraki çalıştırmada kendiliğinden yeniden denenir.
+- En sonda içeriklerin işlem günleri atanır.
+- Ham CSV yazmaz. `fetch_prices.py` + `database.py` ilk kurulum ve tam yenileme için kalır.
 
 **Fiyatsız veritabanı (Ceren için):** `data/raw` klasörü boşken `database.py`
 çalıştırılırsa şema ve 50 hisselik `stocks` tablosu kurulur, fiyatlar atlanır. KAP verisi
@@ -107,6 +125,9 @@ Her kuralın kaç satırı sildiği `update_log.detail` alanına JSON olarak yaz
 - **Bayram arifeleri:** Borsa yarım gün çalışır; ilk sürümde 18:10 kuralı bu günlerde de uygulanır.
 - **TRMET ve TRALT** Kasım 2025'te KOZAA ve KOZAL kodlarından yeni kodlarına geçti; Yahoo eski
   geçmişi yeni kodlara taşımış, 2023'ten itibaren veri kesintisiz.
+- **Yahoo son işlem gününü geç tamamlar:** Seans kapandıktan saatler sonra bile son günün
+  `close` değeri boş gelebilir. Temizleme kuralı bu satırı atar; gün bir sonraki
+  çalıştırmada eklenir.
 
 ## Veri ve lisans
 
