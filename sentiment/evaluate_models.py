@@ -118,8 +118,11 @@ def bootstrap(y_true, y_pred, rng):
         t, p = [y_true[i] for i in idx], [y_pred[i] for i in idx]
         accs.append(accuracy_score(t, p))
         f1s.append(f1_score(t, p, labels=LABELS, average="macro", zero_division=0))
-    q = lambda v: (sorted(v)[int(0.025 * BOOTSTRAP)], sorted(v)[int(0.975 * BOOTSTRAP) - 1])
-    return q(accs), q(f1s)
+
+    def interval(values):
+        ordered = sorted(values)
+        return ordered[int(0.025 * BOOTSTRAP)], ordered[int(0.975 * BOOTSTRAP) - 1]
+    return interval(accs), interval(f1s)
 
 
 def report(rows, preds, out_md):
@@ -135,7 +138,7 @@ def report(rows, preds, out_md):
             if not idx:
                 continue
             y_true = [rows[i]["label"] for i in idx]
-            dist = {l: y_true.count(l) for l in LABELS}
+            dist = {label: y_true.count(label) for label in LABELS}
             for name, pred in preds.items():
                 y_pred = [pred[i][0] for i in idx]
                 acc = accuracy_score(y_true, y_pred)
@@ -177,7 +180,7 @@ def main(files, db_path, out_dir):
             for name, pred in preds.items():
                 lab, score, prob = pred[i]
                 w.writerow([r["file"], r["group"], r["source"], r["source_id"], int(r["analysed"]), r["label"],
-                            name, lab, f"{score:.4f}", *(f"{prob[l]:.4f}" for l in LABELS), r["text"]])
+                            name, lab, f"{score:.4f}", *(f"{prob[label]:.4f}" for label in LABELS), r["text"]])
     report(rows, preds, out_dir / "eval_results.md")
 
 

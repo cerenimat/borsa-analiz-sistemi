@@ -103,7 +103,7 @@ def main(args):
           f" | labelers: {dict(Counter(r['labeler'] or '-' for r in rows))} | device: {dev}", flush=True)
     tok = AutoTokenizer.from_pretrained(args.base)
     model = AutoModelForSequenceClassification.from_pretrained(
-        args.base, num_labels=3, id2label=dict(enumerate(LABELS)), label2id={l: i for i, l in enumerate(LABELS)},
+        args.base, num_labels=3, id2label=dict(enumerate(LABELS)), label2id={label: i for i, label in enumerate(LABELS)},
         ignore_mismatched_sizes=True,          # a base with another classifier head gets a fresh 3-class head
     ).to(dev)
 

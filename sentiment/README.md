@@ -97,6 +97,13 @@ python sentiment/fetch_forum.py --db data/forum_test.db --check       # yalnızc
 
 ## Duygu modeli
 
+Model betiklerinin paketleri (PyTorch, Transformers…) ortak `requirements.txt`'de değil; ortak paketlerle
+birlikte şöyle kurulur:
+
+```bash
+pip install -r sentiment/requirements-model.txt
+```
+
 ```bash
 python sentiment/make_validation_set.py --db data/work.db              # 1. küme (doğal dağılım)
 python sentiment/make_validation_set.py --db data/work.db --batch 2    # 2. küme (ayıklanmış metinler)
@@ -115,6 +122,19 @@ python sentiment/score_contents.py --db data/work.db
   eğitilirse `--rescore` eski puanları silip baştan puanlar.
 - Model ve veri dosyaları `data/` altında durur, Git'e girmez (İOG-Y-02); puanlar diğer makinelere
   `export_sentiments.py` ile gider.
+
+**Model karşılaştırması** (`evaluate_models.py`, 2026-11-09). İki doğrulama kümesi birlikte değerlendirildi:
+her grupta 200 elle etiketlenmiş metin (haber = haber başlığı + KAP; yorum = YouTube + forum).
+
+| Model | Haber doğruluk | Haber makro-F1 | Yorum doğruluk | Yorum makro-F1 |
+|---|---|---|---|---|
+| Hep nötr (taban çizgisi) | 0,555 | 0,238 | 0,635 | 0,259 |
+| FinTurkBERT (hazır) | 0,600 | 0,406 | 0,640 | 0,281 |
+| BounTi (hazır) | 0,575 | 0,337 | 0,455 | 0,420 |
+| **BERTurk-FT (ince ayarlı, kullanılan)** | **0,755** | **0,684** | **0,750** | **0,649** |
+
+Yalnızca puanlanan metinlerde (`text_filter.py` sonrası; haber 187, yorum 165) BERTurk-FT: haber 0,738 / 0,676,
+yorum 0,697 / 0,631. %95 güven aralıkları ve sınıf bazında sonuçlar `data/validation/eval_results.md`'de.
 
 ## Duygu puanları (`export_sentiments.py`)
 

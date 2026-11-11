@@ -1,0 +1,5 @@
+-r ../requirements.txt
+openpyxl==3.1.5
+torch==2.14.1
+transformers==5.20.2
+scikit-learn==1.7.2
