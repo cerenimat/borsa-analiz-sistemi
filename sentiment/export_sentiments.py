@@ -44,7 +44,7 @@ def main(db_path, out_path, model):
     if out_path.exists():
         sys.exit(f"Output already exists: {out_path} (remove it or choose another --out)")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    with closing(sqlite3.connect(out_path)) as out:
+    with closing(sqlite3.connect(out_path, uri=True)) as out:   # uri=True: the ATTACH below uses ?mode=ro
         out.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
         out.execute("ATTACH DATABASE ? AS src", (f"file:{db_path.resolve()}?mode=ro",))
         for table in ("stocks", "contents", "content_symbols", "sentiments"):
