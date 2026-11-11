@@ -10,6 +10,12 @@ Sorumlu: Ceren
 | `fetch_youtube.py` | Her hisse için 2023'ten bugüne Türkçe videoları yıl yıl arar (başlığında hisse kodu geçenler), yorumlarını çeker | `contents`, `content_symbols`, `update_log` |
 | `fetch_news.py` | Her hisse için 2023'ten bugüne Google Haberler RSS aramasını ay ay yapar; başlığında şirket adı/kodu geçen haberleri tutar | `contents`, `content_symbols`, `update_log` |
 | `fetch_forum.py` | Hisse.net'te her hissenin forum konusundan 2023'ten bugüne gönderileri çeker | `contents`, `content_symbols`, `update_log` |
+| `text_filter.py` | Hangi içeriklerin puanlanacağını seçer ve model girdisini temizler (İG-11); diğer betikler kullanır | — |
+| `make_validation_set.py` | Elle etiketlenecek doğrulama kümelerini (2 × 200 satır) Excel'e çıkarır | `data/validation/*.xlsx` |
+| `make_training_set.py` | Doğrulama satırlarıyla çakışmayan 2.000 satırlık eğitim kümesini çıkarır | `data/training/train_set.csv` |
+| `train_model.py` | BERTurk'ü eğitim kümesiyle ince ayarlar | `data/models/berturk-sentiment/` |
+| `evaluate_models.py` | Hazır modelleri ve ince ayarlı modeli doğrulama kümelerinde karşılaştırır | `data/validation/eval_results.md` |
+| `score_contents.py` | Puanlanacak içerikleri ince ayarlı modelle puanlar | `sentiments` |
 | `export_sentiments.py` | Duygu puanlarını ve puanlanan içerikleri ortak veritabanına aktarılacak ayrı bir dosyaya çıkarır | çıktı dosyasında `sentiments`, `contents`, `content_symbols`, `stocks` |
 | `merge_sources.py` | `google_news.db`, `youtube.db`, `hissenet.db` ve puan dosyasının içeriğini ortak veritabanına aktarır | hedefte `contents`, `content_symbols`, `update_log`, `sentiments` |
 
@@ -88,6 +94,47 @@ python sentiment/fetch_forum.py --db data/forum_test.db --check       # yalnızc
   istek atılmaz; istekler arasında beklenir.
 - Tekrar çalıştırmak güvenlidir: her konu son okunan sayfadan devam eder, var olan gönderi tekrar eklenmez.
 - `'forum'` kaynağı şemadaki `update_log` izin listesinde yoksa betik (ve `merge_sources.py`) ekler.
+
+## Duygu modeli
+
+Model betiklerinin paketleri (PyTorch, Transformers…) ortak `requirements.txt`'de değil; ortak paketlerle
+birlikte şöyle kurulur:
+
+```bash
+pip install -r sentiment/requirements-model.txt
+```
+
+```bash
+python sentiment/make_validation_set.py --db data/work.db              # 1. küme (doğal dağılım)
+python sentiment/make_validation_set.py --db data/work.db --batch 2    # 2. küme (ayıklanmış metinler)
+python sentiment/make_training_set.py --db data/work.db
+python sentiment/train_model.py                                        # ~440 MB model, Git'e girmez
+python sentiment/evaluate_models.py --db data/work.db --files data/validation/validation_set.xlsx data/validation/validation_set_2.xlsx
+python sentiment/score_contents.py --db data/work.db --dry-run         # yalnızca sayar
+python sentiment/score_contents.py --db data/work.db
+```
+
+- Doğrulama kümeleri elle etiketlenir ve modelin ölçüldüğü tek kaynaktır; eğitime hiç girmez
+  (`make_training_set.py` bu satırları kaynak + kimlik ve metin üzerinden dışarıda bırakır).
+- Eğitim kümesinin etiketleri (`labeler` sütunu) bir dil modeliyle üretildi; modelin başarısı yalnızca elle
+  etiketlenmiş doğrulama kümelerinde ölçülür.
+- `score_contents.py` yalnızca puanı olmayan içerikleri puanlar; tekrar çalıştırmak güvenlidir. Model yeniden
+  eğitilirse `--rescore` eski puanları silip baştan puanlar.
+- Model ve veri dosyaları `data/` altında durur, Git'e girmez (İOG-Y-02); puanlar diğer makinelere
+  `export_sentiments.py` ile gider.
+
+**Model karşılaştırması** (`evaluate_models.py`, 2026-11-09). İki doğrulama kümesi birlikte değerlendirildi:
+her grupta 200 elle etiketlenmiş metin (haber = haber başlığı + KAP; yorum = YouTube + forum).
+
+| Model | Haber doğruluk | Haber makro-F1 | Yorum doğruluk | Yorum makro-F1 |
+|---|---|---|---|---|
+| Hep nötr (taban çizgisi) | 0,555 | 0,238 | 0,635 | 0,259 |
+| FinTurkBERT (hazır) | 0,600 | 0,406 | 0,640 | 0,281 |
+| BounTi (hazır) | 0,575 | 0,337 | 0,455 | 0,420 |
+| **BERTurk-FT (ince ayarlı, kullanılan)** | **0,755** | **0,684** | **0,750** | **0,649** |
+
+Yalnızca puanlanan metinlerde (`text_filter.py` sonrası; haber 187, yorum 165) BERTurk-FT: haber 0,738 / 0,676,
+yorum 0,697 / 0,631. %95 güven aralıkları ve sınıf bazında sonuçlar `data/validation/eval_results.md`'de.
 
 ## Duygu puanları (`export_sentiments.py`)
 
