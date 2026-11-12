@@ -20,7 +20,9 @@ Run (from the project root):
     python sentiment/fetch_kap.py                # all stocks
     python sentiment/fetch_kap.py THYAO PGSUS    # only these stocks
     python sentiment/fetch_kap.py --retry-failed # only the queries that failed last time
+    python sentiment/fetch_kap.py --db data/work.db --update   # only since each stock's last run
 """
+import argparse
 import json
 import sys
 import time
@@ -36,6 +38,7 @@ sys.path.insert(0, str(ROOT / "data_collection"))
 from config import DB_PATH, TIMEZONE  # noqa: E402
 from database import (assign_trading_dates, connect, create_schema,  # noqa: E402
                       seed_stocks)
+from incremental import start_dates  # noqa: E402
 
 START_DATE = date(2023, 1, 1)   # team decision: all sources start here
 WAIT_SECONDS = 1.5              # pause between requests to avoid loading KAP
@@ -81,10 +84,10 @@ def build_query(oid, start, end):
     }
 
 
-def quarters():
-    """Yields 3-month (start, end) ranges from START_DATE to today."""
+def quarters(first=START_DATE):
+    """Yields 3-month (start, end) ranges from `first` (default START_DATE) to today."""
     today = date.today()
-    start = START_DATE
+    start = first
     while start <= today:
         month = start.month + 3
         next_start = date(start.year + (month - 1) // 12, (month - 1) % 12 + 1, 1)
@@ -177,7 +180,7 @@ def write_log(conn, symbol, status, received, skipped, inserted, existing, detai
                                   inserted, existing, json.dumps(detail, ensure_ascii=False)))
 
 
-def main(symbols=None, db_path=DB_PATH, retry_failed=False):
+def main(symbols=None, db_path=DB_PATH, retry_failed=False, update=False, since=None):
     with closing(connect(db_path)) as conn:
         create_schema(conn)
         seed_stocks(conn)   # content_symbols needs the stocks table
@@ -194,12 +197,17 @@ def main(symbols=None, db_path=DB_PATH, retry_failed=False):
             stocks = [(s, o) for s, o in stocks if s in todo]
             print(f"Retrying {sum(len(q) for q in todo.values())} failed queries "
                   f"for {len(stocks)} stocks\n")
+        firsts = start_dates(conn, "kap", since) if update else {}
+        if update:
+            print(f"Update: from {min(firsts.values(), default=START_DATE)} "
+                  f"(each stock {'from ' + str(since) if since else 'from its last run minus a margin'})\n")
 
         totals = {"inserted": 0, "existing": 0, "skipped": 0, "failed_queries": 0}
         for symbol, oid in stocks:
             received = inserted = existing = skipped = 0
             failed, record_errors = [], []
-            for start, end in (todo[symbol] if retry_failed else quarters()):
+            ranges = todo[symbol] if retry_failed else quarters(firsts.get(symbol, START_DATE))
+            for start, end in ranges:
                 try:
                     records = query_kap(oid, start, end)
                 except Exception as e:
@@ -215,6 +223,8 @@ def main(symbols=None, db_path=DB_PATH, retry_failed=False):
 
             status = "error" if failed else "success"
             detail = {"failed_queries": failed, "skipped_records": record_errors[:20]}
+            if update:
+                detail["update_from"] = str(firsts.get(symbol, START_DATE))
             write_log(conn, symbol, status, received, skipped, inserted, existing, detail)
             totals["inserted"] += inserted
             totals["existing"] += existing
@@ -235,6 +245,13 @@ def main(symbols=None, db_path=DB_PATH, retry_failed=False):
 
 
 if __name__ == "__main__":
-    args = sys.argv[1:]
-    retry = "--retry-failed" in args
-    main([a.upper() for a in args if not a.startswith("--")] or None, retry_failed=retry)
+    parser = argparse.ArgumentParser(description="Collect KAP disclosures for BIST 50 stocks.")
+    parser.add_argument("symbols", nargs="*", help="only these stocks (default: all)")
+    parser.add_argument("--retry-failed", action="store_true", help="only the queries that failed last time")
+    parser.add_argument("--db", type=Path, default=DB_PATH, help="database file")
+    parser.add_argument("--update", action="store_true",
+                        help="only since each stock's last successful run (minus a few days)")
+    parser.add_argument("--since", type=date.fromisoformat, help="with --update: start date for every stock")
+    args = parser.parse_args()
+    main([s.upper() for s in args.symbols] or None, db_path=args.db, retry_failed=args.retry_failed,
+         update=args.update or bool(args.since), since=args.since)

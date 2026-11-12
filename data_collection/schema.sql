@@ -107,7 +107,7 @@ GROUP BY cs.symbol, c.trading_date, s.model;
 CREATE TABLE IF NOT EXISTS update_log (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     source     TEXT NOT NULL
-               CHECK (source IN ('yfinance', 'kap', 'news', 'youtube')),
+               CHECK (source IN ('yfinance', 'kap', 'news', 'youtube', 'forum')),
     symbol     TEXT,
     run_at     TEXT NOT NULL,
     status     TEXT NOT NULL CHECK (status IN ('success', 'error')),

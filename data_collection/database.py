@@ -45,6 +45,14 @@ ON CONFLICT (symbol) DO UPDATE SET
     kap_oid = excluded.kap_oid
 """
 
+# İşlem günlerini bir kez hesaplayıp indeksli geçici tabloya koyar.
+# trading_days bir görünümdür (SELECT DISTINCT date FROM prices); doğrudan
+# kullanılırsa her içerik satırı için fiyat tablosu baştan taranır.
+# PRIMARY KEY, tarihe göre ikili arama yapılabilen bir indeks oluşturur.
+CREATE_TEMP_TRADING_DAYS = """
+CREATE TEMP TABLE trading_days_tmp (date TEXT PRIMARY KEY) WITHOUT ROWID
+"""
+
 # Boş trading_date alanlarını doldurur (GAB İG-10):
 #   * Kapanış saatinden önce yayımlanan içerik -> aynı gün (işlem günüyse)
 #   * Kapanıştan sonra, hafta sonu veya bayramda -> sonraki ilk işlem günü
@@ -53,7 +61,7 @@ ASSIGN_TRADING_DATES = """
 UPDATE contents
 SET trading_date = (
     SELECT MIN(t.date)
-    FROM trading_days t
+    FROM temp.trading_days_tmp t
     WHERE t.date > substr(contents.published_at, 1, 10)
        OR (t.date = substr(contents.published_at, 1, 10)
            AND substr(contents.published_at, 12, 5) < ?)
@@ -149,8 +157,17 @@ def assign_trading_dates(conn: sqlite3.Connection) -> tuple[int, int]:
     Tekrar çalıştırmak güvenlidir: yalnızca boş alanlara dokunur.
     """
     before = count_missing_trading_dates(conn)
-    with conn:
-        conn.execute(ASSIGN_TRADING_DATES, (CONTENT_CUTOFF,))
+    if before == 0:
+        return 0, 0  # doldurulacak alan yok
+    conn.execute("DROP TABLE IF EXISTS temp.trading_days_tmp")
+    conn.execute(CREATE_TEMP_TRADING_DAYS)
+    try:
+        with conn:
+            conn.execute("INSERT INTO temp.trading_days_tmp "
+                         "SELECT date FROM trading_days")
+            conn.execute(ASSIGN_TRADING_DATES, (CONTENT_CUTOFF,))
+    finally:
+        conn.execute("DROP TABLE temp.trading_days_tmp")
     after = count_missing_trading_dates(conn)
     return before - after, after
 

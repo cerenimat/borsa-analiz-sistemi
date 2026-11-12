@@ -221,3 +221,6 @@ __marimo__/
 
 # Veri dosyalari repoya eklenmez (GAB IOG-Y-02)
 data/
+
+# macOS klasör ayarları
+.DS_Store
