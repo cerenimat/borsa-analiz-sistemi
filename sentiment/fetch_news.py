@@ -24,6 +24,7 @@ Run (from the project root):
     python sentiment/fetch_news.py THYAO PGSUS        # only these stocks
     python sentiment/fetch_news.py --retry-failed     # stocks without a successful run
     python sentiment/fetch_news.py --db data/test.db  # another database file
+    python sentiment/fetch_news.py --db data/work.db --update   # only since each stock's last run
 """
 import argparse
 import json
@@ -44,6 +45,7 @@ sys.path.insert(0, str(ROOT / "data_collection"))
 from config import DB_PATH, TIMEZONE  # noqa: E402
 from database import (assign_trading_dates, connect, create_schema,  # noqa: E402
                       seed_stocks)
+from incremental import start_dates  # noqa: E402
 
 START_MONTH = date(2023, 1, 1)        # team decision: all sources start on 2023-01-01
 WAIT_SECONDS = 1.5                    # pause between requests (Google limits fast clients)
@@ -105,10 +107,10 @@ def build_query(terms, start, end):
     return f"({names}) hisse after:{start.isoformat()} before:{end.isoformat()}"
 
 
-def months():
-    """(first day, first day of next month) from START_MONTH to the current month."""
+def months(first=START_MONTH):
+    """(first day, first day of next month) from the month of `first` to the current month."""
     today = date.today()
-    start = START_MONTH
+    start = first.replace(day=1)
     while start <= today:
         end = date(start.year + start.month // 12, start.month % 12 + 1, 1)
         yield start, end
@@ -203,7 +205,7 @@ def latest_runs(conn):
     return {s: (status, json.loads(detail or "{}")) for s, status, detail in rows}
 
 
-def main(symbols=None, db_path=DB_PATH, retry_failed=False):
+def main(symbols=None, db_path=DB_PATH, retry_failed=False, update=False, since=None):
     with closing(connect(db_path)) as conn:
         create_schema(conn)
         seed_stocks(conn)   # content_symbols needs the stocks table
@@ -217,6 +219,11 @@ def main(symbols=None, db_path=DB_PATH, retry_failed=False):
         if retry_failed:
             stocks = [(s, n) for s, n in stocks if runs.get(s, ("", {}))[0] != "success"]
             print(f"{len(stocks)} stocks without a successful run\n")
+        firsts = start_dates(conn, "news", since) if update else {}
+        if update:
+            prev_runs = latest_runs(conn)
+            print(f"Update: from {min(firsts.values(), default=START_MONTH)} "
+                  f"(each stock {'from ' + str(since) if since else 'from its last run minus a margin'})\n")
 
         totals = {"inserted": 0, "existing": 0, "off_topic": 0}
         blocked = False
@@ -224,11 +231,15 @@ def main(symbols=None, db_path=DB_PATH, retry_failed=False):
             terms = search_terms(symbol, name)
             # With --retry-failed, months finished in the previous (interrupted) run are skipped.
             completed = list(runs.get(symbol, ("", {}))[1].get("completed_months", []))
+            if update:   # months are searched again from the start date; earlier ones stay completed
+                first = firsts.get(symbol, START_MONTH)
+                done = prev_runs.get(symbol, ("", {}))[1].get("completed_months", [])
+                completed = [m for m in done if m < first.isoformat()[:7]]
             received = inserted = existing = off_topic = skipped = 0
             per_year, errors = {}, []
             month = None
             try:
-                for start, end in months():
+                for start, end in months(firsts.get(symbol, START_MONTH) if update else START_MONTH):
                     month = start.isoformat()[:7]
                     if month in completed:
                         continue
@@ -250,7 +261,7 @@ def main(symbols=None, db_path=DB_PATH, retry_failed=False):
 
             hard_errors = [e for e in errors if "limit" not in e]
             status = "error" if hard_errors else "success"
-            detail = {"query_terms": terms, "completed_months": completed,
+            detail = {"query_terms": terms, "completed_months": sorted(set(completed)),
                       "kept_per_year": per_year, "off_topic": off_topic, "errors": errors[:20]}
             write_log(conn, symbol, status, received, off_topic + skipped, inserted, existing, detail)
             totals["inserted"] += inserted
@@ -277,5 +288,9 @@ if __name__ == "__main__":
     parser.add_argument("--retry-failed", action="store_true",
                         help="only stocks without a successful run")
     parser.add_argument("--db", type=Path, default=DB_PATH, help="database file")
+    parser.add_argument("--update", action="store_true",
+                        help="only since each stock's last successful run (minus a few days)")
+    parser.add_argument("--since", type=date.fromisoformat, help="with --update: start date for every stock")
     args = parser.parse_args()
-    main([s.upper() for s in args.symbols] or None, db_path=args.db, retry_failed=args.retry_failed)
+    main([s.upper() for s in args.symbols] or None, db_path=args.db, retry_failed=args.retry_failed,
+         update=args.update or bool(args.since), since=args.since)
