@@ -1,33 +1,47 @@
 import unittest
-from forecasting.features import build_features
+
+import numpy as np
+import pandas as pd
+
 from forecasting.models import LojistikRegresyonModeli
 from forecasting.train import FEATURE_COLUMNS, time_series_split
 
 
-class TestForecasting(unittest.TestCase):
-    def test_no_data_leakage_in_split(self):
-        """Eğitim verisindeki en son tarih, test verisindeki ilk tarihten küçük olmalıdır (İOG-G-03)."""
-        df = build_features("THYAO")
-        train_df, test_df = time_series_split(df, train_ratio=0.8)
+def _make_dummy_df(n_rows: int = 120) -> pd.DataFrame:
+    """Veritabanına bağımlı olmadan test için yapay zaman serisi üretir."""
+    rng = np.random.default_rng(42)
+    dates = pd.date_range("2024-01-01", periods=n_rows, freq="B")
+    data = {"date": dates}
+    for col in FEATURE_COLUMNS:
+        data[col] = rng.normal(0.0, 1.0, size=n_rows)
+    data["target"] = rng.integers(0, 2, size=n_rows)
+    return pd.DataFrame(data)
 
-        self.assertGreater(len(train_df), 0)
-        self.assertGreater(len(test_df), 0)
+
+class TestForecasting(unittest.TestCase):
+    def setUp(self):
+        self.df = _make_dummy_df()
+
+    def test_no_data_leakage_in_split(self):
+        """Eğitim son tarihi, test ilk tarihinden küçük olmalıdır (İOG-G-03)."""
+        train_df, test_df = time_series_split(self.df, train_ratio=0.8)
         self.assertLess(train_df["date"].max(), test_df["date"].min())
 
     def test_reproducibility(self):
         """Aynı veriyle iki kez eğitilen model birebir aynı sonucu vermelidir (İOG-G-02)."""
-        df = build_features("THYAO")
-        train_df, test_df = time_series_split(df, train_ratio=0.8)
+        train_df, test_df = time_series_split(self.df, train_ratio=0.8)
+        x_train, y_train = train_df[FEATURE_COLUMNS], train_df["target"]
+        x_test = test_df[FEATURE_COLUMNS]
 
         m1 = LojistikRegresyonModeli()
-        m2 = LojistikRegresyonModeli()
-        m1.egit(train_df[FEATURE_COLUMNS], train_df["target"])
-        m2.egit(train_df[FEATURE_COLUMNS], train_df["target"])
+        m1.egit(x_train, y_train)
+        pred1 = m1.tahmin_et(x_test)
 
-        self.assertEqual(
-            m1.degerlendir(test_df[FEATURE_COLUMNS], test_df["target"]),
-            m2.degerlendir(test_df[FEATURE_COLUMNS], test_df["target"]),
-        )
+        m2 = LojistikRegresyonModeli()
+        m2.egit(x_train, y_train)
+        pred2 = m2.tahmin_et(x_test)
+
+        self.assertTrue((pred1 == pred2).all())
 
 
 if __name__ == "__main__":
