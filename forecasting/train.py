@@ -1,12 +1,14 @@
 import argparse
 import json
+import sqlite3
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 
 import joblib
 import pandas as pd
 
-from features import build_features
+from features import DB_PATH, build_features
 from models import (
     CogunlukSinifiModeli,
     LojistikRegresyonModeli,
@@ -27,6 +29,13 @@ FEATURE_COLUMNS = [
 ]
 
 MODELS_DIR = Path("models")
+
+
+def get_all_symbols(db_path: Path = DB_PATH) -> list[str]:
+    """Veritabanındaki tüm hisse sembollerini alfabetik olarak döndürür."""
+    with closing(sqlite3.connect(db_path)) as conn:
+        rows = conn.execute("SELECT symbol FROM stocks ORDER BY symbol;").fetchall()
+    return [r[0] for r in rows]
 
 
 def time_series_split(
@@ -60,12 +69,21 @@ def train_and_evaluate(symbol: str, train_ratio: float = 0.8) -> dict:
     symbol_dir.mkdir(parents=True, exist_ok=True)
 
     sonuclar = []
+    gunluk_tahminler = {
+        "symbol": symbol,
+        "dates": [str(d.date()) for d in test_df["date"]],
+        "actual": [int(v) for v in y_test],
+        "predictions": {},
+    }
+
     for m in modeller:
         m.egit(x_train, y_train)
         rapor = m.degerlendir(x_test, y_test)
         sonuclar.append(rapor)
 
-        # Eğitilmiş modeli joblib ile kaydet (İOG-AM-03)
+        # İG-22: Test dönemi tahmin-gerçekleşen grafiği için günlük çıktılar
+        gunluk_tahminler["predictions"][m.ad] = [int(v) for v in m.tahmin_et(x_test)]
+
         dosya_adi = m.ad.lower().replace(" ", "_").replace("(", "").replace(")", "") + ".joblib"
         joblib.dump(m, symbol_dir / dosya_adi)
 
@@ -89,30 +107,71 @@ def train_and_evaluate(symbol: str, train_ratio: float = 0.8) -> dict:
     with open(symbol_dir / "metrics.json", "w", encoding="utf-8") as f:
         json.dump(ozet, f, ensure_ascii=False, indent=2)
 
+    with open(symbol_dir / "test_predictions.json", "w", encoding="utf-8") as f:
+        json.dump(gunluk_tahminler, f, ensure_ascii=False, indent=2)
+
     return ozet
+
+
+def train_all_stocks(train_ratio: float = 0.8) -> None:
+    """BIST 50'deki tüm hisseleri sırayla eğitir ve genel özet kaydeder."""
+    symbols = get_all_symbols()
+    tum_sonuclar = []
+    hatali = []
+
+    print(f"Toplam {len(symbols)} hisse için toplu eğitim başlıyor...\n")
+    for idx, sym in enumerate(symbols, start=1):
+        try:
+            rapor = train_and_evaluate(sym, train_ratio=train_ratio)
+            satir = {"symbol": sym, "test_size": rapor["test_size"]}
+            for r in rapor["results"]:
+                satir[f"{r['model']}_acc"] = r["accuracy"]
+                satir[f"{r['model']}_f1"] = r["f1"]
+            tum_sonuclar.append(satir)
+            print(f"[{idx:02d}/{len(symbols)}] {sym:<6} tamamlandı (test: {rapor['test_size']} gün)")
+        except Exception as exc:
+            hatali.append({"symbol": sym, "error": str(exc)})
+            print(f"[{idx:02d}/{len(symbols)}] {sym:<6} HATA: {exc}")
+
+    summary_df = pd.DataFrame(tum_sonuclar)
+    MODELS_DIR.mkdir(parents=True, exist_ok=True)
+    summary_df.to_csv(MODELS_DIR / "bist50_summary.csv", index=False, encoding="utf-8")
+
+    print("\n=== BIST 50 Ortalama Performans ===")
+    for col in summary_df.columns:
+        if col.endswith("_acc") or col.endswith("_f1"):
+            print(f"{col:<35}: {summary_df[col].mean():.4f}")
+
+    if hatali:
+        print(f"\nHata alınan hisseler ({len(hatali)}): {hatali}")
+    print("\nÖzet tablo kaydedildi: models/bist50_summary.csv")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Hisse yön tahmin modellerini eğitir.")
-    parser.add_argument("--symbol", default="THYAO", help="Hisse sembolü (ör. THYAO)")
+    parser.add_argument("--symbol", default="THYAO", help="Tek hisse sembolü (ör. THYAO)")
+    parser.add_argument("--all", action="store_true", help="Tüm BIST 50 hisselerini eğit")
     args = parser.parse_args()
 
-    rapor = train_and_evaluate(args.symbol.upper())
-    print(f"\n=== {rapor['symbol']} Model Değerlendirme Sonuçları ===")
-    print(f"Eğitim: {rapor['train_period'][0]} -> {rapor['train_period'][1]} ({rapor['train_size']} gün)")
-    print(f"Test  : {rapor['test_period'][0]} -> {rapor['test_period'][1]} ({rapor['test_size']} gün)\n")
+    if args.all:
+        train_all_stocks()
+    else:
+        rapor = train_and_evaluate(args.symbol.upper())
+        print(f"\n=== {rapor['symbol']} Model Değerlendirme Sonuçları ===")
+        print(f"Eğitim: {rapor['train_period'][0]} -> {rapor['train_period'][1]} ({rapor['train_size']} gün)")
+        print(f"Test  : {rapor['test_period'][0]} -> {rapor['test_period'][1]} ({rapor['test_size']} gün)\n")
 
-    tablo = pd.DataFrame(
-        [
-            {
-                "Model": r["model"],
-                "Doğruluk": r["accuracy"],
-                "Kesinlik": r["precision"],
-                "Duyarlılık": r["recall"],
-                "F1": r["f1"],
-            }
-            for r in rapor["results"]
-        ]
-    )
-    print(tablo.to_string(index=False))
-    print(f"\nModeller ve metrics.json kaydedildi: models/{rapor['symbol']}/")
+        tablo = pd.DataFrame(
+            [
+                {
+                    "Model": r["model"],
+                    "Doğruluk": r["accuracy"],
+                    "Kesinlik": r["precision"],
+                    "Duyarlılık": r["recall"],
+                    "F1": r["f1"],
+                }
+                for r in rapor["results"]
+            ]
+        )
+        print(tablo.to_string(index=False))
+        print(f"\nModeller ve metrics.json kaydedildi: models/{rapor['symbol']}/")

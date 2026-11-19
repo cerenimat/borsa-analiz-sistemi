@@ -224,3 +224,5 @@ data/
 
 # macOS klasör ayarları
 .DS_Store
+
+models/
