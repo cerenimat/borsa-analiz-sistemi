@@ -3,9 +3,9 @@ import json
 
 import pandas as pd
 
-from features import build_features
-from models import LojistikRegresyonModeli, RastgeleOrmanModeli
-from train import MODELS_DIR, get_all_symbols, time_series_split
+from .features import build_features
+from .models import LojistikRegresyonModeli, RastgeleOrmanModeli
+from .train import MODELS_DIR, get_all_symbols, time_series_split
 
 PRICE_ONLY_FEATURES = [
     "daily_return",

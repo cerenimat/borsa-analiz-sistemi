@@ -16,16 +16,16 @@ Tüm komutlar proje kök dizininden ve `.venv` aktifken çalıştırılır:
 
 ```powershell
 # Tek hisse eğitimi
-python forecasting/train.py --symbol THYAO
+python -m forecasting.train --symbol THYAO
 
 # Tüm BIST 50 hisseleri için toplu eğitim
-python forecasting/train.py --all
+python -m forecasting.train --all
 
 # Bir sonraki işlem günü tahmini (JSON çıktı)
-python forecasting/predict.py --symbol THYAO
+python -m forecasting.predict --symbol THYAO
 
 # Duygulu vs. duygusuz özellik karşılaştırması
-python forecasting/compare_sentiment.py --all
+python -m forecasting.compare_sentiment --all
 
 # Veri sızıntısı ve tekrarlanabilirlik birim testleri
 python -m unittest tests/test_forecasting.py -v

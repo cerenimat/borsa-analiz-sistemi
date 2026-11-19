@@ -1,12 +1,7 @@
-import sys
 import unittest
-from pathlib import Path
-
-sys.path.insert(0, str(Path("forecasting").resolve()))
-
-from features import build_features  # noqa: E402
-from models import LojistikRegresyonModeli  # noqa: E402
-from train import FEATURE_COLUMNS, time_series_split  # noqa: E402
+from forecasting.features import build_features
+from forecasting.models import LojistikRegresyonModeli
+from forecasting.train import FEATURE_COLUMNS, time_series_split
 
 
 class TestForecasting(unittest.TestCase):

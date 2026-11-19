@@ -4,8 +4,8 @@ from typing import Any
 
 import joblib
 
-from features import compute_rsi, load_raw_data
-from train import FEATURE_COLUMNS, MODELS_DIR
+from .features import compute_rsi, load_raw_data
+from .train import FEATURE_COLUMNS, MODELS_DIR
 
 
 def _prepare_latest_features(symbol: str):

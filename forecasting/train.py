@@ -8,8 +8,8 @@ from pathlib import Path
 import joblib
 import pandas as pd
 
-from features import DB_PATH, build_features
-from models import (
+from .features import DB_PATH, build_features
+from .models import (
     CogunlukSinifiModeli,
     LojistikRegresyonModeli,
     RastgeleOrmanModeli,
@@ -28,7 +28,8 @@ FEATURE_COLUMNS = [
     "comment_score_ma5",
 ]
 
-MODELS_DIR = Path("models")
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+MODELS_DIR = PROJECT_ROOT / "models"
 
 
 def get_all_symbols(db_path: Path = DB_PATH) -> list[str]:

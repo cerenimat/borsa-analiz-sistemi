@@ -5,7 +5,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-DB_PATH = Path("data") / "borsa.db"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+DB_PATH = PROJECT_ROOT / "data" / "borsa.db"
 
 
 def load_raw_data(symbol: str, db_path: Path = DB_PATH) -> pd.DataFrame:
