@@ -52,20 +52,22 @@ def compute_rsi(series: pd.Series, window: int = 14) -> pd.Series:
     return rsi.fillna(50.0)
 
 
-def build_features(symbol: str, db_path: Path = DB_PATH) -> pd.DataFrame:
-    """Model eğitimi için özellik setini ve t+1 hedef yönünü oluşturur."""
-    df = load_raw_data(symbol, db_path)
-
-    # Teknik göstergeler (İG-16)
+def add_features(df: pd.DataFrame) -> pd.DataFrame:
+    """Fiyat ve duygu verilerine teknik ve duygu ozelliklerini ekler."""
+    df = df.copy()
     df["daily_return"] = df["adj_close"].pct_change()
     df["ma_20"] = (df["adj_close"] / df["adj_close"].rolling(window=20).mean()) - 1
     df["ma_50"] = (df["adj_close"] / df["adj_close"].rolling(window=50).mean()) - 1
     df["volatility_20"] = df["daily_return"].rolling(window=20).std()
     df["rsi_14"] = compute_rsi(df["adj_close"], window=14)
-
-    # Duygu gürültüsünü azaltmak için 5 günlük hareketli ortalama
     df["news_score_ma5"] = df["news_score"].rolling(window=5).mean()
     df["comment_score_ma5"] = df["comment_score"].rolling(window=5).mean()
+    return df
+
+
+def build_features(symbol: str, db_path: Path = DB_PATH) -> pd.DataFrame:
+    """Model eğitimi için özellik setini ve t+1 hedef yönünü oluşturur."""
+    df = add_features(load_raw_data(symbol, db_path))
 
     # Hedef değişken: Bir sonraki işlem gününün yönü (t+1 > t ise 1, değilse 0)
     df["next_close"] = df["adj_close"].shift(-1)

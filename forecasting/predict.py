@@ -4,20 +4,13 @@ from typing import Any
 
 import joblib
 
-from .features import compute_rsi, load_raw_data
+from .features import add_features, load_raw_data
 from .train import FEATURE_COLUMNS, MODELS_DIR
 
 
 def _prepare_latest_features(symbol: str):
     """Veritabanındaki en son işlem günü için özellik satırını hazırlar."""
-    df = load_raw_data(symbol)
-    df["daily_return"] = df["adj_close"].pct_change()
-    df["ma_20"] = df["adj_close"].rolling(window=20).mean()
-    df["ma_50"] = df["adj_close"].rolling(window=50).mean()
-    df["volatility_20"] = df["daily_return"].rolling(window=20).std()
-    df["rsi_14"] = compute_rsi(df["adj_close"], window=14)
-    df["news_score_ma5"] = df["news_score"].rolling(window=5).mean()
-    df["comment_score_ma5"] = df["comment_score"].rolling(window=5).mean()
+    df = add_features(load_raw_data(symbol))
 
     latest = df.dropna(subset=FEATURE_COLUMNS).iloc[[-1]]
     return latest
