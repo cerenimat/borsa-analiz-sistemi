@@ -58,8 +58,8 @@ def build_features(symbol: str, db_path: Path = DB_PATH) -> pd.DataFrame:
 
     # Teknik göstergeler (İG-16)
     df["daily_return"] = df["adj_close"].pct_change()
-    df["ma_20"] = df["adj_close"].rolling(window=20).mean()
-    df["ma_50"] = df["adj_close"].rolling(window=50).mean()
+    df["ma_20"] = (df["adj_close"] / df["adj_close"].rolling(window=20).mean()) - 1
+    df["ma_50"] = (df["adj_close"] / df["adj_close"].rolling(window=50).mean()) - 1
     df["volatility_20"] = df["daily_return"].rolling(window=20).std()
     df["rsi_14"] = compute_rsi(df["adj_close"], window=14)
 
