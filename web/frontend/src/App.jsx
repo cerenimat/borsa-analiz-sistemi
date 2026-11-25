@@ -241,6 +241,42 @@ function App() {
             />
           )}
 
+
+          {!fiyatYukleniyor && fiyatlar.length > 0 && (
+            <Plot
+              data={[
+                {
+                  x: fiyatlar.map((fiyat) => fiyat.date),
+                  y: fiyatlar.map((fiyat) => fiyat.volume),
+                  type: 'bar',
+                  name: 'İşlem Hacmi',
+                  marker: {
+                    color: '#0d9488',
+                  },
+                },
+              ]}
+              layout={{
+                title: {
+                  text: `${seciliHisse} İşlem Hacmi`,
+                },
+                xaxis: {
+                  title: { text: 'Tarih' },
+                },
+                yaxis: {
+                  title: { text: 'İşlem Hacmi (Adet)' },
+                },
+                autosize: true,
+              }}
+              useResizeHandler={true}
+              style={{ width: '100%', height: '300px' }}
+              config={{
+                responsive: true,
+                displaylogo: false,
+              }}
+            />
+          )}
+
+
   <div>
     <h2>Yapay Zekâ Tahminleri</h2>
 
